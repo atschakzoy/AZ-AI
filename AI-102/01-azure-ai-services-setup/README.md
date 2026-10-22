@@ -2,28 +2,28 @@
 
 ## What is this and why does it matter?
 
-Every AI-102 topic uses Microsoft Foundry and Foundry Tools (formerly Azure AI Services). Before you can call any of them, you need to know how to provision a Foundry resource, authenticate to it, call it from Python, and secure it properly.
+Every AI-102 topic uses Microsoft Foundry and Foundry Tools. Before you can call any of them, you need to know how to provision a Foundry resource, authenticate to it, call it from Python, and secure it properly.
 
 This stage is the foundation for everything else in AI-102. Get this right and every other stage is just learning a new capability on top of the same pattern.
 
 ---
 
-## What you will learn
+## What you will learn here
 
-- What Azure AI Services is (the umbrella resource)
-- How to provision AI services with the Azure CLI and Terraform
+- What Foundry Tools is (the umbrella resource)
+- How to provision Foundry Tools resources with the Azure CLI and Terraform
 - How to authenticate with keys and with Managed Identity
-- How to call AI services from Python using the SDK and REST
-- How to secure AI services (Private Endpoints, network rules)
+- How to call Foundry Tools from Python using the SDK and REST
+- How to secure Foundry Tools resources (Private Endpoints, network rules)
 - How to monitor usage and set cost alerts
 
 ---
 
 ## Part 1 — Microsoft Foundry & Foundry Tools Overview
 
-**Microsoft Foundry** (formerly Azure AI Foundry / Azure AI Studio) is the unified platform for building AI apps and agents. It includes:
+**Microsoft Foundry** is the unified platform for building AI apps and agents. It includes:
 - Model deployments (GPT-4o, embeddings, DALL-E)
-- **Foundry Tools** — the pre-built AI service APIs (formerly Azure AI Services / Cognitive Services)
+- **Foundry Tools** — the pre-built AI service APIs (Language, Speech, Vision, Document Intelligence, and more)
 - Agent Service, evaluations, and tracing
 
 **Foundry Tools** give you AI capabilities without training your own models — Language, Speech, Vision, Document Intelligence, and more.
@@ -35,14 +35,17 @@ This stage is the foundation for everything else in AI-102. Get this right and e
 | **Foundry resource (multi-service)** | One resource for all Foundry Tools | Development, when you use many services |
 | **Single-service resource** | One resource for one specific service (e.g. only Language) | Production, for cost tracking and tighter access control |
 
-Both give you an **endpoint URL** and **API keys** to authenticate. The underlying Azure resource type is still `Microsoft.CognitiveServices/accounts`.
+Both give you an **endpoint URL** and **API keys** to authenticate. The underlying Azure resource type is `Microsoft.CognitiveServices/accounts` — this is the real Azure resource provider name and it has not changed, even though the service is now called Foundry Tools.
 
 ---
 
 ## Part 2 — Provisioning with Azure CLI
 
 ```bash
-# Create a multi-service Azure AI resource
+# NOTE: The CLI command is "az cognitiveservices" — this is the real Azure CLI command.
+# It has not been renamed even though the service is now called Foundry Tools. Use it as-is.
+
+# Create a multi-service Foundry Tools resource
 az cognitiveservices account create \
   --name ai-myapp-dev \
   --resource-group rg-ai-dev \
@@ -65,10 +68,10 @@ az cognitiveservices account keys list \
 ```
 
 **Single-service examples (`--kind` values):**
-- `TextAnalytics` — Azure AI Language
-- `ComputerVision` — Azure AI Vision
-- `SpeechServices` — Azure AI Speech
-- `FormRecognizer` — Document Intelligence
+- `TextAnalytics` — Foundry Tools Language
+- `ComputerVision` — Foundry Tools Vision
+- `SpeechServices` — Foundry Tools Speech
+- `FormRecognizer` — Foundry Tools Document Intelligence
 - `OpenAI` — Azure OpenAI
 
 ---
@@ -145,7 +148,7 @@ client = TextAnalyticsClient(
 You write the same code everywhere — it picks the right method automatically.
 
 **RBAC role for Managed Identity access to Foundry Tools:**
-`Foundry User` (formerly `Cognitive Services User`) — grants permission to call the AI service APIs.
+`Foundry User` — grants permission to call the Foundry Tools APIs.
 
 ```bash
 az role assignment create \
@@ -189,7 +192,7 @@ pip install azure-identity  # always needed for auth
 
 ---
 
-## Part 6 — Securing AI Services
+## Part 6 — Securing Foundry Tools
 
 **Network security:**
 
@@ -246,7 +249,7 @@ az consumption budget create \
 
 ---
 
-## AI-102 Exam Checklist — AI Services Setup
+## AI-102 Exam Checklist — Foundry Tools Setup
 
 - [ ] What is the difference between a multi-service and single-service AI resource?
 - [ ] What two things do you always need to call an AI service? (endpoint + key/credential)
@@ -263,5 +266,5 @@ az consumption budget create \
 1. Create an Azure AI multi-service resource using the CLI. Save the endpoint and key to environment variables.
 2. Install `azure-ai-textanalytics` and `azure-identity`. Write a Python script that calls sentiment analysis using `DefaultAzureCredential` locally (it will use your CLI login).
 3. Create the same resource with Terraform. Add `identity { type = "SystemAssigned" }`.
-4. Assign the `Cognitive Services User` role to your own user identity and test calling without a key.
+4. Assign the `Foundry User` role to your own user identity and test calling without a key.
 5. Set `default_action = "Deny"` in your Terraform config and redeploy. Confirm you can no longer call the service from a public IP.

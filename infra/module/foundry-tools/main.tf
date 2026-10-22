@@ -1,0 +1,20 @@
+resource "azurerm_cognitive_account" "foundry" {
+  name                = "ai-${var.workload}-${var.environment}"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  kind                = "CognitiveServices"
+  sku_name            = "S0"
+  custom_subdomain_name = "ai-${var.workload}-${var.environment}"
+
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+    network_acls {
+    default_action = "Allow"
+    ip_rules       = []
+  }
+
+}
+
