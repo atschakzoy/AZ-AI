@@ -1,0 +1,30 @@
+# Claude
+CLAUDE.md
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+override.tf
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+
+# Azure secrets
+local.settings.json
+*.pem
+*.key
+
+# Mac
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
