@@ -13,7 +13,7 @@ client = TextAnalyticsClient(
     credential=DefaultAzureCredential()
 )
 
-documents = ["I love building AI apps on Azure"]
+documents = ["I love building azure ai but I hate using microsoft but it is okay to work in germany"]
 
 result = client.analyze_sentiment(documents)
 
