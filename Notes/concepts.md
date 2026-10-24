@@ -191,7 +191,7 @@ Foundry Tools is the collection of AI capabilities that Microsoft built and host
 
 When you call a Foundry Tools API, three things determine what runs behind the scenes:
 
-1. **The API method you call** — `analyze_sentiment` vs `recognize_entities` vs `read` each routes to a different internal model
+1. **The SDK method you call** — `analyze_sentiment` vs `recognize_entities` vs `read` each maps to a different HTTP endpoint, which routes to a different internal model
 2. **The API version in the SDK** — e.g. `v2023_04_01`. Microsoft can silently swap the underlying model as long as the output format stays the same
 3. **Microsoft's current production model** — they update it when they have a better one. You have no control and no visibility into the model name
 
@@ -264,6 +264,29 @@ response = client.chat.completions.create(
 | `gpt-35-turbo` | Faster, cheaper chat model — text only |
 | `text-embedding-ada-002` | Converts text into vectors — used in RAG pipelines |
 | `dall-e-3` | Generates images from text descriptions |
+
+---
+
+## Foundry Tools vs Azure OpenAI — The Clean Line
+
+Foundry Tools only **analyses** existing content — it never **generates** new content.
+
+| | Foundry Tools | Azure OpenAI |
+|---|---|---|
+| Analyse text | Yes — Language | No |
+| Extract from documents | Yes — Document Intelligence | No |
+| Detect harmful content | Yes — Content Safety | No |
+| Transcribe audio | Yes — Speech | No |
+| **Generate text** | **No** | **Yes — GPT-4o** |
+| **Create embeddings** | **No** | **Yes — text-embedding-ada-002** |
+| **Generate images** | **No** | **Yes — DALL-E** |
+
+For a RAG pipeline this means three separate resources are always needed:
+- Foundry Tools multi-service account — Document Intelligence (text extraction)
+- Azure OpenAI resource — embeddings + GPT-4o (generation)
+- Azure AI Search resource — vector storage and retrieval
+
+The multi-service account does not cover Azure OpenAI. There is no shortcut — these are always separate resources.
 
 ---
 
