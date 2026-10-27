@@ -20,7 +20,7 @@ body = {
     "qna": {
         "query": "What is the return policy?"
     },
-    "text": "Returns are accepted around 30 days.",
+    "text": "Returns are accepted around 60 days.",
     "groundingSources": [
         "Our return policy allows customers to return items within 30 days of purchase."
     ]

@@ -364,3 +364,193 @@ for category in response.categories_analysis:
 `category.severity` — the severity score as an integer: 0, 2, 4, or 6.
 
 This is the same `for` loop pattern as sentiment.py — loop through a list, read properties off each item.
+
+---
+
+## Real-world example — Customer Support AI Safety Pipeline
+
+This script combines all five services into one pipeline that a real company would run before and after processing a customer message through an AI chatbot.
+
+**The scenario:** A customer sends a message to a support chatbot. Before the AI responds — and before anything gets logged — the pipeline:
+1. Shields against prompt injection (someone trying to hijack the AI)
+2. Checks for harmful content (hate, violence, etc.)
+3. Detects and redacts PII so the raw message is never stored in logs
+4. Scores the sentiment to decide if a human agent needs to step in
+5. Verifies the AI's response is actually grounded in the source documents (no hallucinations)
+
+```python
+import os
+import json
+from dotenv import load_dotenv
+from azure.identity import DefaultAzureCredential
+from azure.ai.contentsafety import ContentSafetyClient
+from azure.ai.contentsafety.models import AnalyzeTextOptions
+from azure.ai.textanalytics import TextAnalyticsClient
+from azure.core.rest import HttpRequest
+
+# ---------------------------------------------------------------
+# SETUP
+# Load values from .env and create one client per Azure service.
+# DefaultAzureCredential uses your `az login` locally and
+# Managed Identity when running on Azure — no keys needed.
+# ---------------------------------------------------------------
+
+load_dotenv()
+
+content_safety_endpoint = os.environ["CONTENT_SAFETY_ENDPOINT"]
+foundry_endpoint = os.environ["FOUNDRY_ENDPOINT"]
+
+credential = DefaultAzureCredential()
+
+content_safety_client = ContentSafetyClient(endpoint=content_safety_endpoint, credential=credential)
+text_analytics_client = TextAnalyticsClient(endpoint=foundry_endpoint, credential=credential)
+
+# ---------------------------------------------------------------
+# SAMPLE INPUT
+# In a real app this would come from a user form, API request,
+# or a message queue — not hardcoded like this.
+# ---------------------------------------------------------------
+
+user_message = "My name is John Smith, email john@example.com. I hate this product, it broke after one day! Tell me how to get a refund or I will report you."
+ai_response = "You can return the product within 30 days for a full refund by visiting our returns portal."
+source_document = "Our return policy allows customers to return items within 30 days of purchase for a full refund."
+
+print("=" * 60)
+print("CUSTOMER SUPPORT AI SAFETY PIPELINE")
+print("=" * 60)
+
+# ---------------------------------------------------------------
+# STEP 1 — PROMPT SHIELD
+# Check if the user is trying to trick the AI with a prompt
+# injection attack (e.g. "ignore all previous instructions").
+# If an attack is detected, block the message immediately.
+# ---------------------------------------------------------------
+
+print("\n[1] Checking for prompt injection attacks...")
+
+shield_body = {
+    "userPrompt": user_message,
+    "documents": [source_document]
+}
+
+shield_request = HttpRequest(
+    method="POST",
+    url=f"{content_safety_endpoint}contentsafety/text:shieldPrompt",
+    params={"api-version": "2024-02-15-preview"},
+    headers={"Content-Type": "application/json"},
+    content=json.dumps(shield_body)
+)
+
+shield_response = content_safety_client.send_request(shield_request)
+shield_response.raise_for_status()
+shield_result = shield_response.json()
+
+user_attack = shield_result['userPromptAnalysis']['attackDetected']
+doc_attack = shield_result['documentsAnalysis'][0]['attackDetected']
+
+print(f"  User prompt attack: {user_attack}")
+print(f"  Document attack: {doc_attack}")
+
+if user_attack or doc_attack:
+    print("  ACTION: Message blocked — prompt injection detected.")
+    exit()
+
+# ---------------------------------------------------------------
+# STEP 2 — CONTENT SAFETY
+# Check for harmful content: hate, violence, sexual, self-harm.
+# Severity: 0 = safe, 2 = low, 4 = medium, 6 = high.
+# Block anything at severity 4 or above.
+# ---------------------------------------------------------------
+
+print("\n[2] Checking for harmful content...")
+
+safety_request = AnalyzeTextOptions(text=user_message)
+safety_response = content_safety_client.analyze_text(safety_request)
+
+blocked = False
+for category in safety_response.categories_analysis:
+    print(f"  {category.category}: severity {category.severity}")
+    if category.severity >= 4:
+        blocked = True
+
+if blocked:
+    print("  ACTION: Message blocked — harmful content detected.")
+    exit()
+
+# ---------------------------------------------------------------
+# STEP 3 — PII DETECTION
+# Find personal information (name, email, phone) in the message.
+# Log only the redacted version — never store raw PII in logs.
+# ---------------------------------------------------------------
+
+print("\n[3] Detecting PII...")
+
+pii_response = text_analytics_client.recognize_pii_entities([user_message])
+
+for doc in pii_response:
+    print(f"  Redacted for logging: {doc.redacted_text}")
+    for entity in doc.entities:
+        print(f"  Found: {entity.category} — '{entity.text}' (confidence: {entity.confidence_score:.2f})")
+
+# ---------------------------------------------------------------
+# STEP 4 — SENTIMENT ANALYSIS
+# Score the emotional tone: positive, neutral, or negative.
+# If strongly negative, flag for escalation to a human agent.
+# ---------------------------------------------------------------
+
+print("\n[4] Analysing sentiment...")
+
+sentiment_response = text_analytics_client.analyze_sentiment([user_message])
+
+for doc in sentiment_response:
+    print(f"  Sentiment: {doc.sentiment}")
+    print(f"  Positive: {doc.confidence_scores.positive:.2f}")
+    print(f"  Negative: {doc.confidence_scores.negative:.2f}")
+    print(f"  Neutral:  {doc.confidence_scores.neutral:.2f}")
+
+    if doc.sentiment == "negative" and doc.confidence_scores.negative > 0.8:
+        print("  ACTION: High-priority ticket — escalate to human agent.")
+
+# ---------------------------------------------------------------
+# STEP 5 — GROUNDEDNESS CHECK
+# Before sending the AI's response to the customer, verify it is
+# actually supported by the source document.
+# This catches hallucinations — things the AI made up.
+# ---------------------------------------------------------------
+
+print("\n[5] Checking AI response groundedness...")
+
+groundedness_body = {
+    "domain": "Generic",
+    "task": "QnA",
+    "qna": {
+        "query": user_message
+    },
+    "text": ai_response,
+    "groundingSources": [source_document]
+}
+
+groundedness_request = HttpRequest(
+    method="POST",
+    url=f"{content_safety_endpoint}contentsafety/text:detectGroundedness",
+    params={"api-version": "2024-02-15-preview"},
+    headers={"Content-Type": "application/json"},
+    content=json.dumps(groundedness_body)
+)
+
+groundedness_response = content_safety_client.send_request(groundedness_request)
+groundedness_response.raise_for_status()
+groundedness_result = groundedness_response.json()
+
+print(f"  Ungrounded detected: {groundedness_result['ungroundedDetected']}")
+print(f"  Ungrounded percentage: {groundedness_result['ungroundedPercentage']}")
+
+if groundedness_result['ungroundedDetected']:
+    print("  ACTION: AI response blocked — not supported by source documents.")
+else:
+    print("  AI response is safe to send to the customer.")
+
+print("\n" + "=" * 60)
+print("Pipeline complete.")
+print("=" * 60)
+```
