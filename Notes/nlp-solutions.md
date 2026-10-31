@@ -61,6 +61,16 @@ These three always add up to 1.0. The label returned is whichever has the highes
 
 **Opinion Mining** — an optional extension that tells you not just the sentiment but *what* it is about. Instead of "this sentence is negative", it returns "the opinion target is 'service', the aspect is 'speed', and the sentiment is 'negative'." Useful for customer feedback analysis where you want to know which product feature is getting negative feedback.
 
+**Where it is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| E-commerce | Analyse product reviews at scale — flag products with rising negative sentiment |
+| Hospitality | Monitor hotel and restaurant reviews across Tripadvisor, Google, Booking.com |
+| Social media | Track brand sentiment on Twitter/X in real time during a product launch or crisis |
+| Customer support | Prioritise tickets from angry customers before they escalate |
+| Finance | Analyse earnings call transcripts or news articles for market sentiment |
+
 ---
 
 ## Part 2 — Key Phrase Extraction
@@ -73,10 +83,15 @@ Input:  "The weather in London has been terrible this week. Rain every day."
 Output: ["weather", "London", "terrible", "Rain"]
 ```
 
-**When to use it:**
-- Summarising what a long document is about at a glance
-- Tagging documents automatically (customer support tickets, articles)
-- Building a search index by extracting meaningful terms
+**Where it is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Media & publishing | Auto-tag articles with topics so readers can find related content |
+| Customer support | Extract what each ticket is about without reading it manually — route to the right team |
+| Search engines | Build a keyword index from documents without manually writing tags |
+| Research | Quickly understand what a collection of academic papers is about |
+| HR | Scan CVs and extract skills, technologies, and job titles automatically |
 
 **Key phrases vs entities — the difference:**
 - **Key phrases** — what topics are discussed (unstructured)
@@ -110,6 +125,16 @@ NER finds specific, categorised things mentioned in text. It does not just find 
 - `confidence_score` — 0.0 to 1.0 — how confident Azure is in its classification
 - `offset` — character position in the original text where the entity starts (useful for highlighting)
 - `length` — how many characters long the entity is
+
+**Where it is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Legal | Extract all person names, organisations, and dates from contracts automatically |
+| Healthcare | Pull patient names, medications, diagnoses from clinical notes |
+| Finance | Extract company names and dates from earnings reports to feed into a database |
+| News / media | Identify all people and places mentioned in an article for automatic linking |
+| Security | Scan logs and alerts for IP addresses, usernames, and timestamps |
 
 **NER vs PII — the difference:**
 
@@ -147,10 +172,14 @@ Output:
 
 Entity Linking resolves the ambiguity by linking to the specific Wikipedia article that matches the context. It reads the surrounding text to figure out which meaning applies.
 
-**When to use it:**
-- Enriching a knowledge base with linked data
-- Building structured representations of unstructured text
-- Journalism tools — automatically link mentioned people and places to their profiles
+**Where it is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Journalism | Automatically hyperlink every person or place mentioned in an article to their Wikipedia profile |
+| Knowledge graphs | Build structured databases from unstructured text — link "Apple" in a tech article to the company, not the fruit |
+| Academic research | Disambiguate author names and institution names across thousands of papers |
+| Search & discovery | Enrich search results with linked data — clicking "Jordan" shows whether it means the country or the athlete |
 
 ---
 
@@ -163,10 +192,15 @@ Azure reads text and tells you what language it is written in.
 - `iso6391_name` — the two-letter ISO code: "en", "fr", "ar"
 - `confidence_score` — 0.0 to 1.0
 
-**When to use it:**
-- Before running other NLP — Language service performs best when it knows what language it is processing
-- Routing multilingual content — send French text to a French-language processing pipeline
-- Filtering — only process English content
+**Where it is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Global platforms | Route incoming user messages to the correct language support team automatically |
+| Content moderation | Only run moderation on languages the model supports — skip unknown scripts |
+| E-commerce | Detect what language a product review was written in before displaying it |
+| Analytics pipelines | Pre-filter a dataset so only English text goes to an English-only model |
+| Chatbots | Detect user language on first message and switch the bot to reply in the same language |
 
 **Handles mixed-language text.** If a document contains multiple languages, Azure returns the dominant one.
 
@@ -193,6 +227,16 @@ Generates **new sentences** that describe the content — like a human would wri
 **Good for:** Customer support tickets, long reports, emails — anywhere a natural-sounding condensed version is more readable than extracted sentences.
 
 **Which to use:** Extractive is more reliable (no hallucination risk) but sounds choppy. Abstractive is more natural but can occasionally misrepresent details. For compliance or legal use, always use extractive.
+
+**Where summarisation is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Legal | Condense 50-page contracts into a 1-page brief for a manager |
+| Healthcare | Summarise a patient's full medical history for a doctor seeing them for the first time |
+| Finance | Summarise quarterly earnings reports so analysts can review more in less time |
+| News aggregators | Show a 3-sentence preview of a long article |
+| Customer support | Summarise a long email thread before it gets assigned to an agent |
 
 ---
 
@@ -271,6 +315,77 @@ Use `FOUNDRY_ENDPOINT` from your `.env` directly.
 
 ---
 
+---
+
+## The Translator Service
+
+A completely separate Azure resource from the Language service. It does not use the multi-service account — it needs its own dedicated resource with `kind = "TextTranslation"`.
+
+**What it does:** Translates text from one language to another. Supports 100+ languages.
+
+**Key difference from the Language service:**
+- Language service uses a region-specific endpoint URL
+- Translator uses a global endpoint (`api.cognitive.microsofttranslator.com`) but requires the region to be passed as a parameter on every API call
+- The SDK is `azure-ai-translation-text` — a different package from `azure-ai-textanalytics`
+
+**What the SDK can do:**
+
+| Method | What it does |
+|---|---|
+| `client.translate()` | Translate text to one or more target languages. Language detection is automatic and included in the response. |
+| `client.transliterate()` | Convert text between scripts — e.g. Arabic in Arabic script → Arabic in Latin letters |
+| `client.get_supported_languages()` | List all languages and scripts the service supports |
+| `client.find_sentence_boundaries()` | Find where sentences start and end (useful before splitting text for translation) |
+
+**Language detection is free with every translate call** — the response includes `detected_language.language` and `detected_language.score` automatically. No separate API call needed.
+
+**Where Translator is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| E-commerce | Translate product descriptions to sell in multiple countries |
+| Customer support | Translate incoming tickets from any language so a single team can handle them |
+| Healthcare | Translate patient instructions into the patient's native language |
+| Travel & hospitality | Translate hotel listings, menus, and reviews for international guests |
+| Legal / compliance | Translate regulatory documents for filing in other jurisdictions |
+| Real-time chat | Translate messages between users who speak different languages |
+
+---
+
+## The Speech Service
+
+A completely separate Azure resource. Needs its own dedicated resource with `kind = "SpeechServices"`.
+
+**What it does:** Converts between audio and text in both directions — speech-to-text and text-to-speech.
+
+**Key difference from all other Azure AI SDKs:**
+- Other SDKs: one `Client` class, you call methods on it
+- Speech SDK: no client — you create a `SpeechConfig` (settings), then attach it to a `SpeechRecognizer` or `SpeechSynthesizer`
+- Like Language service, the region is baked into the endpoint — but unlike Translator, you do not pass the region separately. You pass it to `SpeechConfig` once, and the SDK handles the rest.
+
+**The two main capabilities:**
+
+| Capability | Class | What it does |
+|---|---|---|
+| Speech-to-Text (STT) | `SpeechRecognizer` | Listens to a microphone or audio file, returns text |
+| Text-to-Speech (TTS) | `SpeechSynthesizer` | Takes text, generates spoken audio, plays it through speakers or saves to a file |
+
+**Speech SDK package:** `azure-cognitiveservices-speech` — imported as `import azure.cognitiveservices.speech as speechsdk`
+
+**Where Speech is mostly used:**
+
+| Industry | Use case |
+|---|---|
+| Accessibility | Convert text content to audio so visually impaired users can listen |
+| Call centres | Transcribe every customer call automatically for quality review and compliance |
+| Voice assistants | Accept spoken commands and respond with synthesised speech |
+| Healthcare | Doctors dictate notes by voice — STT transcribes to structured text in real time |
+| Education | Read content aloud to students, or accept spoken answers from students |
+| Automotive | In-car voice control — navigate, call, play music by speaking |
+| Media | Auto-generate subtitles and captions for video content |
+
+---
+
 ## AI-102 Exam — Key Points
 
 - The Language service is **one resource** covering many capabilities — sentiment, NER, PII, key phrases, language detection, summarisation, question answering, CLU.
@@ -283,3 +398,9 @@ Use `FOUNDRY_ENDPOINT` from your `.env` directly.
 - **CLU replaced LUIS** — any exam question about "Language Understanding" refers to CLU now.
 - Opinion Mining is an extension of Sentiment Analysis that returns the target of the sentiment (e.g. "service speed was negative").
 - Confidence scores are always 0.0 to 1.0. Sentiment scores (positive + negative + neutral) always sum to 1.0.
+- **Translator** requires a dedicated resource (`kind = "TextTranslation"`) — it is NOT covered by the multi-service account.
+- **Translator** uses a global endpoint but requires the region as a parameter on every API call — unlike Language service which bakes the region into the endpoint URL.
+- **Language detection is free with every Translator call** — the response always includes the detected source language.
+- **Speech** requires a dedicated resource (`kind = "SpeechServices"`) — it is NOT covered by the multi-service account.
+- **Speech SDK design is different from all other Azure SDKs** — no client class, instead uses `SpeechConfig` + `SpeechRecognizer` / `SpeechSynthesizer`.
+- **STT** = Speech-to-Text = `SpeechRecognizer`. **TTS** = Text-to-Speech = `SpeechSynthesizer`. Know which class does which.

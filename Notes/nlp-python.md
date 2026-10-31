@@ -4,6 +4,68 @@ Python concepts and patterns introduced in Stage 04. Builds on the patterns in `
 
 ---
 
+## What attributes does each method give you
+
+Every method returns a list of result objects — one per text you sent. Each result object has attributes you can read. Here are the useful ones.
+
+**`analyze_sentiment`**
+
+| Attribute | What it is |
+|---|---|
+| `doc.sentiment` | Overall label — `"positive"`, `"negative"`, `"neutral"`, `"mixed"` |
+| `doc.confidence_scores.positive` | Probability 0.0–1.0 (positive + negative + neutral always = 1.0) |
+| `doc.confidence_scores.negative` | Same |
+| `doc.confidence_scores.neutral` | Same |
+| `doc.sentences` | List of sentence results — loop through it |
+| `sentence.text` | The sentence as it appeared in your text |
+| `sentence.sentiment` | Label for just that sentence |
+
+**`extract_key_phrases`**
+
+| Attribute | What it is |
+|---|---|
+| `doc.key_phrases` | A list of strings — the main topics Azure found |
+
+**`recognize_entities`**
+
+| Attribute | What it is |
+|---|---|
+| `doc.entities` | List of entity results — loop through it |
+| `entity.text` | The exact word or phrase from your text |
+| `entity.category` | Type: `Person`, `Location`, `Organization`, `DateTime`, `Quantity`, etc. |
+| `entity.subcategory` | More specific type if available, e.g. `City` under `Location` |
+| `entity.confidence_score` | 0.0–1.0 |
+| `entity.offset` | Character position where the entity starts in the original text |
+
+**`recognize_linked_entities`**
+
+| Attribute | What it is |
+|---|---|
+| `doc.entities` | List of linked entity results — loop through it |
+| `entity.name` | The canonical Wikipedia article name |
+| `entity.url` | The full Wikipedia URL |
+| `entity.data_source` | Usually `"Wikipedia"` |
+| `entity.matches` | List of places in the text where this entity appeared |
+| `match.text` | The exact text as it appeared |
+| `match.confidence_score` | 0.0–1.0 |
+
+**`detect_language`**
+
+| Attribute | What it is |
+|---|---|
+| `doc.primary_language.name` | Full name — `"French"`, `"English"`, `"Arabic"` |
+| `doc.primary_language.iso6391_name` | Two-letter code — `"fr"`, `"en"`, `"ar"` |
+| `doc.primary_language.confidence_score` | 0.0–1.0 |
+
+**On every result object (all methods)**
+
+| Attribute | What it is |
+|---|---|
+| `doc.is_error` | `True` if this document failed. Always check before reading other attributes. |
+| `doc.error` | The error details if `is_error` is `True` |
+
+---
+
 ## Imports
 
 ```python

@@ -92,6 +92,36 @@ pip install azure-ai-textanalytics
 
 ---
 
+## AzureKeyCredential vs DefaultAzureCredential — which to use
+
+Every modern Azure SDK accepts both. They are not the same thing.
+
+| | `AzureKeyCredential` | `DefaultAzureCredential` |
+|---|---|---|
+| **What it uses** | An API key from your `.env` | Your Azure CLI login, or Managed Identity in production |
+| **Where the key lives** | In `.env` on your machine | Nowhere — no key exists |
+| **Works locally without setup** | Yes — just copy the key from Terraform output | Only if you ran `az login` AND have the right RBAC role on the resource |
+| **Safe for GitHub / CI/CD** | No — keys must never be committed | Yes — this is the production pattern |
+| **Requires RBAC role** | No | Yes — the user or identity must have `Foundry User` (or similar) role |
+
+**Rule for this project:**
+- **Local Python scripts** → `AzureKeyCredential` — simpler, works immediately, key stays in `.env` which is gitignored
+- **GitHub Actions and Container Apps** → `DefaultAzureCredential` — no keys stored anywhere, Managed Identity handles auth
+
+You will switch to `DefaultAzureCredential` properly when you reach Stage 07/08 and deploy to Container Apps. That is when it matters most.
+
+```python
+# Local development (what we use now)
+from azure.core.credentials import AzureKeyCredential
+client = TextAnalyticsClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+
+# Production / CI/CD (Stage 07+)
+from azure.identity import DefaultAzureCredential
+client = TextAnalyticsClient(endpoint=endpoint, credential=DefaultAzureCredential())
+```
+
+---
+
 ## HTTP and REST — What the SDK Hides
 
 Under the hood, every SDK is making HTTP requests to a REST API. REST is a standard way services communicate over the internet — your code sends a request to a URL and gets JSON back.

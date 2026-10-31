@@ -68,17 +68,29 @@ def get_embedding(text: str) -> list[float]:
     ).data[0].embedding
 
 def retrieve(question: str, top_k: int = 3) -> list[dict]:
+    # Hybrid search — combines keyword matching AND vector similarity in one call
+    # Keyword search catches exact terms ("Azure OpenAI", product codes, names)
+    # Vector search catches meaning ("how do I deploy?" matches "deployment guide")
+    # Hybrid is almost always better than either alone
     results = search_client.search(
-        search_text=question,
+        search_text=question,             # keyword component
         vector_queries=[VectorizedQuery(
             vector=get_embedding(question),
             k_nearest_neighbors=top_k,
-            fields="content_vector"
+            fields="content_vector"       # vector component — field that stores the embedding
         )],
         select=["id", "title", "content"],
-        top=top_k
+        top=top_k,
+        query_type="semantic",            # re-rank results by meaning after retrieval
+        semantic_configuration_name="default"  # must be configured on the index
     )
     return [{"id": r["id"], "title": r["title"], "content": r["content"]} for r in results]
+
+# Why three ranking layers?
+#   1. Keyword search  — BM25 algorithm, fast, catches exact matches
+#   2. Vector search   — cosine similarity, catches meaning even with different words
+#   3. Semantic rerank — a separate language model re-reads the top results and reorders
+#                        them by true relevance to the question. Most expensive but most accurate.
 
 def answer(question: str) -> dict:
     chunks = retrieve(question)
@@ -109,22 +121,89 @@ def answer(question: str) -> dict:
 ## Part 2 — Optimising RAG
 
 **Prompt engineering for RAG:**
-- Set `temperature=0.1` — factual answers need consistency
-- Explicitly tell the model to cite sources
+- Set `temperature=0.1` — factual answers need consistency, not creativity
+- Explicitly tell the model to cite sources — `[Source 1]`, `[Source 2]`
 - Tell the model to say "I don't know" if the answer is not in the sources (prevents hallucination)
+- Ground the model hard: "Answer using ONLY the provided sources. Do not use your general knowledge."
 
 **Improving retrieval:**
-- Use **hybrid search** (keyword + vector) — catches both exact matches and semantic matches
+- Use **hybrid search** (keyword + vector + semantic reranking) — the Part 1 retrieve function does all three
 - Increase `top_k` if answers are incomplete — retrieve more chunks
-- Chunk documents well — too small = missing context, too large = diluted relevance
+- Chunk documents well — too small = missing context, too large = diluted relevance. 300–500 tokens per chunk is a common starting point.
+- Overlap chunks by ~50 tokens — so a sentence that falls on a boundary appears in both chunks
 
 **Evaluating RAG quality:**
 
-| Metric | What it measures |
-|--------|----------------|
-| **Groundedness** | Is the answer supported by the retrieved chunks? |
-| **Relevance** | Did retrieval return the right documents? |
-| **Answer quality** | Is the answer accurate and complete? |
+| Metric | What it measures | How to check it |
+|--------|----------------|----------------|
+| **Groundedness** | Is the answer supported by the retrieved chunks? | Content Safety Groundedness Detection (Stage 02) |
+| **Relevance** | Did retrieval return the right documents? | Manual review — does the source actually contain the answer? |
+| **Faithfulness** | Did the model stick to the sources or add extra knowledge? | Compare answer against chunks — any facts not in the chunks? |
+| **Answer quality** | Is the answer accurate and complete? | Human evaluation or LLM-as-judge |
+
+**RAG evaluation in code — using LLM-as-judge:**
+
+```python
+def evaluate_groundedness(answer: str, chunks: list[dict]) -> dict:
+    # Use GPT-4o itself to check whether the answer is grounded in the sources
+    # This pattern is called "LLM-as-judge" — use the model to evaluate model output
+    context = "\n\n".join(f"[Source {i+1}]: {c['content']}" for i, c in enumerate(chunks))
+
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": """You are a grounding evaluator.
+Given an answer and the source documents it was generated from, determine:
+1. Is every claim in the answer supported by the sources? (grounded: true/false)
+2. Which specific claims are NOT supported, if any?
+Respond in JSON: {"grounded": true/false, "unsupported_claims": ["...list..."]}"""
+            },
+            {
+                "role": "user",
+                "content": f"Sources:\n{context}\n\nAnswer to evaluate:\n{answer}"
+            }
+        ],
+        response_format={"type": "json_object"},
+        temperature=0
+    )
+
+    import json
+    return json.loads(response.choices[0].message.content)
+
+# Usage
+result = answer("What are the Azure OpenAI pricing tiers?")
+evaluation = evaluate_groundedness(result["answer"], result["sources"])
+
+if not evaluation["grounded"]:
+    print("WARNING — answer contains unsupported claims:")
+    for claim in evaluation["unsupported_claims"]:
+        print(f"  - {claim}")
+```
+
+---
+
+## Part 2b — When to Use a Smaller Model
+
+GPT-4o is the best model but also the most expensive. In a real production app, not every task needs GPT-4o.
+
+**Model selection guide:**
+
+| Task | Right model |
+|---|---|
+| Complex reasoning, nuanced answers | GPT-4o |
+| Simple extraction, classification | GPT-4o mini (cheaper, faster) |
+| Embedding generation | `text-embedding-3-small` |
+| Grounding / evaluation (internal) | GPT-4o mini |
+| Voice / real-time (latency critical) | GPT-4o mini or GPT-4o Realtime |
+
+**GPT-4o mini** — a smaller, much cheaper version of GPT-4o. Use it for:
+- Tasks in the hot path of an API (every request → every millisecond matters)
+- Internal evaluation calls (you are calling the model to check another model's output)
+- Simple classification or routing tasks
+
+**Rule of thumb:** Design with GPT-4o, then ask "does this specific step actually need a frontier model?" For anything that is not the main answer generation, switch to mini.
 
 ---
 
@@ -303,6 +382,11 @@ az role assignment create \
 - [ ] Why set temperature low (0.1) for RAG?
 - [ ] What is the difference between RAG and fine-tuning?
 - [ ] When should you fine-tune vs use RAG?
+- [ ] What is hybrid search? What three ranking layers does it combine?
+- [ ] What is "semantic reranking" and how is it different from vector search?
+- [ ] What is LLM-as-judge and when would you use it to evaluate RAG?
+- [ ] What are the three groundedness/quality metrics for RAG? (groundedness, relevance, faithfulness)
+- [ ] When would you use GPT-4o mini instead of GPT-4o?
 - [ ] What is the Foundry Agent Service?
 - [ ] What three tools can you give a Foundry agent (code interpreter, file search, function)?
 - [ ] What is a thread in the agent API?
@@ -314,9 +398,10 @@ az role assignment create \
 
 ## Exercises
 
-1. Build the complete RAG pipeline. Index 10 documents. Test with 5 questions and print sources.
-2. Add groundedness detection (Stage 02) — flag any answer not supported by the retrieved chunks.
-3. Create a Foundry Agent with the Code Interpreter tool. Ask it a maths question and a data analysis question.
-4. Add a custom function tool to your agent (e.g. `get_stock_price(ticker)`). Verify the agent calls it when asked.
-5. Build a two-agent pipeline: Agent A searches your indexed documents, Agent B summarises the results.
-6. Wrap in FastAPI. Deploy to Azure Container Apps with Managed Identity. Assign all required RBAC roles.
+1. Build the complete RAG pipeline using hybrid search (keyword + vector). Index 10 documents. Test with 5 questions and print sources.
+2. Add LLM-as-judge groundedness evaluation to your RAG pipeline. Print a warning when the answer contains unsupported claims.
+3. Compare GPT-4o and GPT-4o mini on the same 5 RAG questions. Note any quality difference. Count tokens used.
+4. Create a Foundry Agent with the Code Interpreter tool. Ask it a maths question and a data analysis question.
+5. Add a custom function tool to your agent (e.g. `get_stock_price(ticker)`). Verify the agent calls it when asked.
+6. Build a two-agent pipeline: Agent A searches your indexed documents, Agent B summarises the results.
+7. Wrap in FastAPI. Deploy to Azure Container Apps with Managed Identity. Assign all required RBAC roles.

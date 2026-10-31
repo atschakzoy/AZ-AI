@@ -4,6 +4,148 @@ A running reference of Python concepts used in this project, explained plainly.
 
 ---
 
+## for loops — what the variable actually is
+
+When you write `for x in some_list:`, the variable `x` is just a name you chose. Python takes the first item out of the list and puts it into `x`. Then the second item, and so on.
+
+**The variable is whatever the list contains.** If the list contains strings, `x` is a string. If the list contains objects, `x` is an object.
+
+```python
+# List of strings — name is a string each time
+names = ["Alice", "Bob"]
+for name in names:
+    print(name.upper())   # .upper() works because strings have that method
+
+# List of objects — doc is an object each time
+result = client.analyze_sentiment(documents)
+for doc in result:
+    print(doc.sentiment)  # .sentiment works because the object has that attribute
+```
+
+The SDK returns a list of **result objects** — not strings. So `doc` is a result object from the moment the loop hands it to you. You did not make it an object — it already was one, sitting inside `result`.
+
+**The levels in an NLP result:**
+
+```
+documents = ["The food was amazing. But the service was really slow."]
+                ↓
+result          ← list with one item (one item per text you sent)
+  └── doc       ← the result for the whole text (both sentences together)
+        ├── doc.sentiment          overall label: "negative"
+        ├── doc.confidence_scores  {positive: 0.05, negative: 0.94}
+        └── doc.sentences          list of sentence results
+              ├── sentence 1 → "The food was amazing."   → positive
+              └── sentence 2 → "But the service was really slow." → negative
+```
+
+| Loop | What each item is |
+|---|---|
+| `for doc in result` | the result for one full text (everything in one slot of your list) |
+| `for sentence in doc.sentences` | one sentence inside that text |
+
+---
+
+## Python Lingo — the correct words for things
+
+When talking to other developers, use these words. They are not interchangeable.
+
+| Word | What it means | Example |
+|---|---|---|
+| **Package / SDK** | The thing you `pip install` — a collection of files Microsoft (or anyone) wrote and published | `azure-ai-textanalytics` |
+| **Module** | A single `.py` file — either inside an SDK, or one you write yourself | `nlp.py` is your module. `azure/ai/textanalytics/__init__.py` is Microsoft's |
+| **Class** | A blueprint for creating objects — defines what data and methods an object has | `TextAnalyticsClient` |
+| **Instance** | One specific object created from a class — has its own endpoint and credential | `client = TextAnalyticsClient(...)` — `client` is an instance |
+| **Method** | A function that belongs to a class — you call it on an instance | `client.analyze_sentiment(...)` |
+| **Function** | A standalone piece of code, not attached to a class | `load_dotenv()` |
+| **Attribute** | A value stored on an object — you read it with a dot | `doc.sentiment`, `entity.category` |
+
+**How to say it correctly in a sentence:**
+
+> "I imported the `TextAnalyticsClient` **class** from the `azure-ai-textanalytics` **package**. I created a **client instance** from it and I call its **methods** — like `analyze_sentiment` and `extract_key_phrases`. Each method returns a result object and I read the result's **attributes** like `.sentiment` or `.key_phrases`."
+
+---
+
+## Method vs Attribute — how to tell them apart instantly
+
+One rule: **parentheses = method, no parentheses = attribute.**
+
+```python
+client.analyze_sentiment(documents)   # method — has (), runs code, returns something
+client.extract_key_phrases(documents) # method — has (), runs code, returns something
+
+doc.sentiment        # attribute — no (), just holds a value, you read it
+doc.confidence_scores  # attribute — no ()
+entity.text          # attribute — no ()
+entity.category      # attribute — no ()
+```
+
+Methods *do* something. Attributes *hold* something.
+
+Think of it like a person:
+- **Method** → `person.run()` — an action, has to be triggered
+- **Attribute** → `person.name` — a fact stored on the object, always there to read
+
+---
+
+## Synchronous vs Long-running operations
+
+Two types of SDK calls. The method name tells you which one it is.
+
+**Synchronous** — no `begin_`, returns the result directly, your script waits inline:
+
+```python
+result = client.analyze_sentiment(documents)   # done immediately
+```
+
+Everything runs in order. Azure responds in milliseconds. You get the result on the same line.
+
+**Long-running** — starts with `begin_`, returns a poller, Azure runs the job in the background:
+
+```python
+poller = client.begin_analyze_actions(documents, actions=[...])
+result = poller.result()   # this line blocks — waits until Azure finishes
+```
+
+- `poller` — an object that tracks the background job. It knows the job ID and how to check Azure for status.
+- `poller.result()` — the line that actually waits. Called **blocking** — it stops your script until Azure is done, then returns the results.
+- Any method starting with `begin_` is a long-running operation.
+
+**Why does summarisation need this?** Sending one sentence takes milliseconds. Sending a 50-page document takes seconds. If the SDK waited inline, your script would freeze with no feedback. The poller lets Azure run the job on their servers while your script stays in control.
+
+**The restaurant analogy:**
+
+| Step | Restaurant | Code |
+|---|---|---|
+| Place order | `begin_analyze_actions(...)` | starts the job |
+| Get a buzzer | `poller` | object that tracks the job |
+| Buzzer goes off | `poller.result()` returns | Azure finished |
+| Pick up food | loop through results | read the output |
+
+**There is also a third type — async/await** — which you will see in web frameworks and production code. It is more advanced: your script can do many things at once without blocking at all. You are not using it here, but now you know the word when you see it.
+
+| Type | How you call it | Returns |
+|---|---|---|
+| Synchronous | `client.method(...)` | result directly |
+| Long-running | `client.begin_method(...)` | poller — call `.result()` to wait |
+| Async | `await client.method(...)` | result, but only inside `async` functions |
+
+---
+
+## One text vs multiple texts — how the list works
+
+Every Language service method takes a **list** of texts, even if you only have one:
+
+```python
+documents = ["one sentence here"]         # one item — result has one item
+documents = ["text one", "text two"]      # two items — result has two items
+```
+
+**Mixing languages in one string** gives Azure one text to analyse — it picks the dominant language and ignores the rest.
+
+**Separate strings** give Azure separate texts — one result per string, one language detected per string.
+
+---
+
 ## Imports
 
 ```python

@@ -36,3 +36,29 @@ output "face_key" {
   value     = module.face-api.face_key
   sensitive = true
 }
+
+output "translator_endpoint" {
+  value = module.translator.endpoint
+}
+
+output "translator_key" {
+  value     = module.translator.key
+  sensitive = true
+}
+
+output "translator_region" {
+  value = module.translator.region
+}
+
+output "speech_endpoint" {
+  value = module.speech.endpoint
+}
+
+output "speech_key" {
+  value     = module.speech.key
+  sensitive = true
+}
+
+output "speech_region" {
+  value = module.speech.region
+}
