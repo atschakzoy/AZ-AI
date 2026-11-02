@@ -1,4 +1,4 @@
-# Stage 05 — Document Intelligence (Form Recognizer)
+# Stage 05 — Document Intelligence
 
 ## What is this and why does it matter?
 

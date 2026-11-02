@@ -50,3 +50,11 @@ module "speech" {
   workload = var.workload
   resource_group_name = azurerm_resource_group.rg.name
 }
+
+module "document-intelligence" {
+  source = "./module/document-intelligence"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = var.location
+  environment = var.environment
+  workload = var.workload
+}

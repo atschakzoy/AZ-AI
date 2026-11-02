@@ -62,3 +62,12 @@ output "speech_key" {
 output "speech_region" {
   value = module.speech.region
 }
+
+output "di_endpoint" {
+  value = module.document-intelligence.endpoint
+}
+
+output "di_key" {
+  value = module.document-intelligence.key
+  sensitive = true
+}
