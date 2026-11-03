@@ -3,6 +3,6 @@ output "endpoint" {
 }
 
 output "key" {
-  value = azurerm_cognitive_account.document_intelligence.primary_access_key
+  value     = azurerm_cognitive_account.document_intelligence.primary_access_key
   sensitive = true
 }

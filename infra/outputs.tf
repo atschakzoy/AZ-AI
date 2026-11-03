@@ -68,6 +68,29 @@ output "di_endpoint" {
 }
 
 output "di_key" {
-  value = module.document-intelligence.key
+  value     = module.document-intelligence.key
   sensitive = true
 }
+
+output "search_endpoint" {
+  value = module.search.endpoint
+}
+
+output "search_key" {
+  value     = module.search.key
+  sensitive = true
+}
+
+output "storage_connection_string" {
+  value     = module.storage.connection_string
+  sensitive = true
+}
+
+output "storage_container_name" {
+  value = module.storage.container_name
+}
+
+output "storage_account_name" {
+  value = module.storage.account_name
+}
+
