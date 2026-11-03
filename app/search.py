@@ -34,7 +34,7 @@ fields = [
     SimpleField(name="category", type=SearchFieldDataType.String, filterable=True, facetable=True)             
 ]
 
-index = SearchIndex(name="documents", fields=fields)
+index = SearchIndex(name="documents",fields=fields)
 index_client.create_or_update_index(index)
 print("Index created")
 
