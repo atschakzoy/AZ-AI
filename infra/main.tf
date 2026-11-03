@@ -3,6 +3,14 @@ resource "azurerm_resource_group" "rg" {
   location = var.location
 }
 
+module "storage" {
+  source              = "./module/storage"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
+}
+
 module "foundry-tools" {
   source              = "./module/foundry-tools"
   location            = var.location
@@ -28,33 +36,41 @@ module "computer-vision" {
 }
 
 module "face-api" {
-  source = "./module/face-api"
-  location = var.location
-  environment = var.environment
-  workload = var.workload
+  source              = "./module/face-api"
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
   resource_group_name = azurerm_resource_group.rg.name
 }
 
 module "translator" {
-  source = "./module/translator"
-  location = var.location
-  environment = var.environment
-  workload = var.workload
+  source              = "./module/translator"
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
   resource_group_name = azurerm_resource_group.rg.name
 }
 
 module "speech" {
-  source = "./module/speech"
-  location = var.location
-  environment = var.environment
-  workload = var.workload
+  source              = "./module/speech"
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
   resource_group_name = azurerm_resource_group.rg.name
 }
 
 module "document-intelligence" {
-  source = "./module/document-intelligence"
+  source              = "./module/document-intelligence"
   resource_group_name = azurerm_resource_group.rg.name
-  location = var.location
-  environment = var.environment
-  workload = var.workload
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
+}
+
+module "search" {
+  source              = "./module/search"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = var.location
+  environment         = var.environment
+  workload            = var.workload
 }
