@@ -38,26 +38,51 @@ client = AzureOpenAI(
 - `api_version` — Azure requires this. Use `"2024-12-01-preview"` or the latest stable version. This is the REST API version, not the model version.
 - The difference from OpenAI.com: you use `AzureOpenAI` not `OpenAI`, and you pass `azure_endpoint` not `base_url`.
 
-### Production (Managed Identity — no keys)
+### DefaultAzureCredential — local and production (recommended)
+
+This is the most secure and up-to-date approach. Same code works locally and in production — no changes needed when you deploy.
 
 ```python
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-# get_bearer_token_provider creates a function that fetches a token automatically
 token_provider = get_bearer_token_provider(
     DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default"   # the scope for Azure AI services
+    "https://cognitiveservices.azure.com/.default"
 )
 
 client = AzureOpenAI(
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    azure_ad_token_provider=token_provider,           # no api_key needed
+    azure_endpoint=os.environ["OPENAI_ENDPOINT"],
+    azure_ad_token_provider=token_provider,
     api_version="2024-12-01-preview"
 )
 ```
 
-Use this in production. `DefaultAzureCredential` picks up the Managed Identity of the Azure service your code runs in (Container App, VM, etc.) — no `.env` file needed.
+Before running locally, log in once with the Azure CLI:
+
+```bash
+az login
+```
+
+- **Locally:** `DefaultAzureCredential` picks up your `az login` session — no key needed in `.env`
+- **On Azure:** `DefaultAzureCredential` automatically picks up the Managed Identity of the Container App or VM — same code, no changes
+
+#### What is `get_bearer_token_provider`?
+
+Azure tokens expire after ~1 hour. If you fetched one token at startup, your calls would start failing mid-session.
+
+`get_bearer_token_provider` does not fetch a token immediately. It creates a small function that knows *how* to fetch one. The OpenAI client calls that function automatically before each request — reusing the token if it is still valid, or fetching a fresh one if it expired.
+
+```python
+get_bearer_token_provider(
+    DefaultAzureCredential(),                          # WHERE to get the token from
+    "https://cognitiveservices.azure.com/.default"     # WHAT the token grants access to
+)
+```
+
+The scope `"https://cognitiveservices.azure.com/.default"` tells Azure: "I want a token for Azure AI / Cognitive Services." Without the right scope, the token would be valid but rejected by the service.
+
+Think of it as: instead of handing the client a key card, you give it a key card machine — it prints a fresh card whenever it needs one.
 
 ---
 
@@ -233,8 +258,181 @@ if response.choices[0].finish_reason == "tool_calls":
 Key things:
 - `finish_reason == "tool_calls"` — the model stopped because it wants to call a function, not because it finished replying
 - `tool_call.function.arguments` is a JSON string — use `json.loads()` to convert it to a Python dict
-- `**args` — "unpack" a dict as keyword arguments. If `args = {"name": "rg-production"}`, then `func(**args)` is the same as `func(name="rg-production")`
+- `**args` — "unpack" a dict as keyword arguments. If `args = {"name": "rg-production"}`, then `func(**args)` is the same as writing `func(name="rg-production")` manually. Used when you don't know the arguments at write time — the model chose them at runtime.
 - `"role": "tool"` — this is how you send a function result back. The `tool_call_id` links it to the original request
+
+### Breaking down every part of a function calling block
+
+```python
+# ── PART A: Your real Python function ─────────────────────────────────────
+def get_azure_service_info(service_name):
+    services = {
+        "container apps": {"description": "Serverless containers", "docs": "https://..."}
+    }
+    return json.dumps(services.get(service_name.lower()))
+```
+**What it is:** a normal Python function you write. Nothing Azure-specific here.
+**What you control:** the name, the arguments, everything it does inside.
+**`json.dumps()`:** converts a Python dict into a JSON string — required because the model only receives text back, not Python objects.
+
+---
+
+```python
+# ── PART B: The tool description ──────────────────────────────────────────
+tools = [
+    {
+        "type": "function",          # always "function" — this never changes
+        "function": {
+            "name": "get_azure_service_info",   # must match your Python function name exactly
+            "description": "Get information about an Azure compute service",  # you write this — the model reads it to decide WHEN to call the function
+            "parameters": {
+                "type": "object",    # always "object" — this never changes
+                "properties": {
+                    "service_name": {              # the argument your function expects
+                        "type": "string",          # the data type of that argument
+                        "description": "The Azure service name"  # helps the model fill in the right value
+                    }
+                },
+                "required": ["service_name"]       # which arguments are mandatory
+            }
+        }
+    }
+]
+```
+**What it is:** a Python dict (not JSON text — the SDK converts it) that you write and send to the model. It is NOT code that runs — it is a job posting that tells the model what tools exist.
+**What you control:** the description text — this is the most important part. The model reads `description` to decide whether this tool fits the user's question. Write it clearly.
+**What is fixed:** `"type": "function"` and `"type": "object"` — always the same, never change these.
+
+---
+
+```python
+# ── PART C: First API call — ask the model with tools available ────────────
+messages = [{"role": "user", "content": "I need microservices that scale to zero. Which Azure service?"}]
+
+fc_response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=messages,
+    tools=tools,          # give the model the tool list
+    tool_choice="auto"    # let the model decide whether to use a tool or answer directly
+)
+```
+**What it is:** the first API call. Same as a normal chat call but with `tools=` added.
+**`tool_choice="auto"`:** the model decides on its own whether to call a tool or just answer. Use `"required"` to force it to always call a tool, or pass a specific tool name to force one tool.
+**What comes back:** either a normal reply (if the model decides no tool is needed) OR a `finish_reason == "tool_calls"` response (model wants to call a function).
+
+---
+
+```python
+# ── PART D: Check if the model wants to call a function ───────────────────
+if fc_response.choices[0].finish_reason == "tool_calls":
+```
+**What it is:** a check on why the model stopped generating.
+**`finish_reason`** possible values:
+- `"stop"` — model finished its reply normally
+- `"tool_calls"` — model stopped to request a function call, has not written a final reply yet
+- `"length"` — stopped because it hit `max_tokens`
+
+---
+
+```python
+# ── PART E: Extract what the model wants to call ──────────────────────────
+    tool_call = fc_response.choices[0].message.tool_calls[0]
+    args = json.loads(tool_call.function.arguments)
+```
+**`tool_calls[0]`:** the first tool call the model requested. If you gave it multiple tools and it wants to call more than one, they are all in this list.
+**`tool_call.function.name`:** which function the model chose — e.g. `"get_azure_service_info"`
+**`tool_call.function.arguments`:** a JSON string with the arguments the model chose — e.g. `'{"service_name": "container apps"}'`
+**`json.loads()`:** converts that JSON string into a Python dict so you can use it — e.g. `{"service_name": "container apps"}`
+
+---
+
+```python
+# ── PART F: Call your function with the model's chosen arguments ───────────
+    result = get_azure_service_info(**args)
+```
+**`**args`:** unpacks the dict as keyword arguments. `get_azure_service_info(**{"service_name": "container apps"})` is the same as `get_azure_service_info(service_name="container apps")`. The model chose the value; you just pass it through.
+
+---
+
+```python
+# ── PART G: Send the result back ──────────────────────────────────────────
+    messages.append(fc_response.choices[0].message)   # the model's tool_call request
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call.id,    # links this result to the original request
+        "content": result                # the string your function returned
+    })
+```
+**Why append the model's message first:** the conversation history must include the model's tool_call request before the tool result — the model needs to see its own request in the history to understand the context.
+**`"role": "tool"`:** a special role that means "this is a function result". The model knows to treat this as data, not as something a human said.
+**`tool_call_id`:** a unique ID on each tool call. If the model requested multiple tools, the ID tells it which result belongs to which request.
+
+---
+
+```python
+# ── PART H: Second API call — model writes the final reply ─────────────────
+    final = client.chat.completions.create(model="gpt-4o", messages=messages)
+    print(final.choices[0].message.content)
+```
+**What it is:** a second normal API call with the full conversation history — now including the tool result. The model reads the data your function returned and writes the final answer to the user. This is a regular reply with `finish_reason == "stop"`.
+
+---
+
+### Three things worth knowing about tools
+
+**1. `tools` is Python dicts, not JSON text.**
+
+You write `tools = [{ "type": "function", ... }]` as a Python list of dicts. The SDK converts it to JSON for you before sending it to the API. You do not need to call `json.dumps()` on it.
+
+**2. `tools` can live at the top of the file — it does not have to be inside a function.**
+
+It is just a variable. Define it once at module level and pass it to any API call that needs it:
+
+```python
+# Top of the file — global scope
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_account_balance",
+            ...
+        }
+    }
+]
+
+# Used anywhere in the file
+response = client.chat.completions.create(model="gpt-4o", messages=messages, tools=tools)
+```
+
+**3. One `tools` list can hold many functions.**
+
+The model receives all of them and picks the right one based on the user's question:
+
+```python
+tools = [
+    {"type": "function", "function": {"name": "get_account_balance", ...}},
+    {"type": "function", "function": {"name": "create_calendar_event", ...}},
+    {"type": "function", "function": {"name": "search_knowledge_base", ...}},
+]
+```
+
+You pass the same `tools` list to every call. The model decides which function (if any) fits the question. You still only handle the one it picked via `tool_calls[0]`.
+
+---
+
+### Real-world function calling use cases
+
+The example in the script uses a dict — that's just to keep the syntax clean while learning. In production, the function body would call a real system:
+
+| What user says | Function the model calls | What the function actually does |
+|---|---|---|
+| "What's my account balance?" | `get_account_balance(user_id)` | Queries your database |
+| "Book a meeting tomorrow at 3pm" | `create_calendar_event(date, time)` | Calls Outlook or Google Calendar API |
+| "How many VMs haven't been used in 30 days?" | `list_vms()` then `get_vm_metrics(vm_id)` | Calls Azure SDK, runs for each VM |
+| "My order hasn't arrived" | `get_order_status(order_id)` | Hits your order management system |
+| "Find docs about this error" | `search_knowledge_base(query)` | Calls Azure AI Search |
+
+**The key value:** without function calling, you write `if/elif` chains to route every possible question. With function calling, the model reads the question and picks the right function itself — no routing logic needed in your code.
 
 ---
 
@@ -453,6 +651,38 @@ response = client.images.generate(
 image_url = response.data[0].url
 print(f"Generated image: {image_url}")
 ```
+
+---
+
+## Why `response` and `reply` are different names
+
+`response` is the full object Azure sends back — it contains the message text, token count, model name, finish reason, and more.
+
+`reply` is just the text pulled out of it:
+
+```python
+reply = response.choices[0].message.content
+```
+
+Think of it like a letter arriving in an envelope:
+- `response` = the envelope with everything inside
+- `reply` = the actual letter you pulled out of it
+
+The names themselves don't matter — you could call them `api_response` and `text`. The pattern is always the same: call the API, get the full object back, then dig into it to get the text you actually want.
+
+---
+
+## Why no `azure-core` import for OpenAI
+
+`AzureKeyCredential` (from `azure-core`) is a wrapper object some Azure SDKs require around a key. The Search SDK requires it. The OpenAI SDK accepts a plain string directly via `api_key=` — no wrapper needed.
+
+`DefaultAzureCredential` (from `azure-identity`) is only for Managed Identity — the production approach where no key exists. It looks for a Managed Identity, environment variables, or a logged-in `az` CLI session to get a token automatically.
+
+| Situation | What you need |
+|---|---|
+| OpenAI SDK + API key | Just `api_key="..."` — nothing extra to import |
+| Search SDK + API key | `AzureKeyCredential` from `azure-core` — the SDK requires the wrapper |
+| Any SDK + Managed Identity | `DefaultAzureCredential` from `azure-identity` |
 
 ---
 
