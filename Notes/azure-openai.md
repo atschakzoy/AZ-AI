@@ -54,6 +54,45 @@ Why this matters: you might have two deployments of the same model — one for p
 
 ---
 
+## SKUs and Deployment Types
+
+Azure OpenAI has two separate SKU decisions:
+
+**For the resource itself** (`azurerm_cognitive_account`):
+- `S0` — the only option. There is no free tier for Azure OpenAI.
+
+**For each model deployment** (`azurerm_cognitive_deployment`):
+
+| Deployment SKU | What it is | When to use |
+|---|---|---|
+| `Standard` | Pay per token, no commitment | Learning, development, variable workloads |
+| `GlobalStandard` | Same pay-per-token, Azure routes across regions | Production apps needing high availability |
+| `ProvisionedManaged` | Reserved capacity — fixed monthly fee for guaranteed throughput (PTU units) | High-volume production (50M+ tokens/month) |
+| `GlobalProvisionedManaged` | Same as above but globally routed | Large-scale production |
+
+For learning: always use `Standard`. `ProvisionedManaged` has a minimum commitment and is expensive — it exists for enterprises with predictable high volume.
+
+The `capacity` field on a `Standard` deployment is a **rate limit** (tokens per minute), not a cost. Setting `capacity = 10` means 10,000 tokens per minute maximum throughput. You only pay for tokens you actually use.
+
+### Capacity limits and best practices
+
+`capacity = 1` equals 1,000 tokens per minute. The default Azure quota in `eastus` for GPT-4o is **150K TPM** (`capacity = 150`) — you can request higher from Microsoft, but it is shared across all deployments in that subscription and region.
+
+| Scenario | Capacity | Notes |
+|---|---|---|
+| Learning / dev | `10` | Prevents accidental overuse, near-zero cost |
+| Internal tool, small team | `50` | Handles dozens of concurrent requests comfortably |
+| Normal production SaaS | `100–150` | Typical for a B2B app with moderate traffic |
+| High demand (consumer app) | Multiple deployments + load balancer | A single Standard deployment throttles at scale |
+
+**Production pattern for high demand:**
+1. Deploy 2–3 `GlobalStandard` deployments across regions
+2. Put Azure API Management (APIM) in front as a load balancer
+3. APIM round-robins requests and retries automatically on `429` (rate limit hit)
+4. If volume is very predictable and consistently high, switch to `ProvisionedManaged` (PTU) — flat monthly rate, guaranteed throughput, no throttling
+
+---
+
 ## Key Concepts
 
 ### Tokens
@@ -97,7 +136,9 @@ Every message you send has a `role`:
 
 The core feature. You send a list of messages and the model replies.
 
-The model has **no memory** — it does not remember previous conversations. To implement multi-turn chat, you must manually append each message and reply to the `messages` list and send the full history every time.
+### Statelessness — the model has no memory
+
+The model has **no memory** — it does not remember previous conversations. Every API call is completely independent. To implement multi-turn chat, you must manually append each message and reply to the `messages` list and send the full history every time.
 
 ```
 Turn 1:
@@ -105,9 +146,28 @@ Turn 1:
 
 Turn 2:
   messages = [system, user1, reply1, user2]  →  reply2
+
+Turn 3:
+  messages = [system, user1, reply1, user2, reply2, user3]  →  reply3
 ```
 
-This is why conversation history can get expensive: every turn sends all previous messages again.
+**What this means in practice:**
+
+- Every single API call sends ALL previous messages from scratch — not just the latest one
+- A 20-turn conversation sends 20 messages on turn 20, not 1
+- Cost grows with every turn because input tokens include the full history
+- If the conversation grows past the model's context window limit, the oldest messages must be dropped or summarised
+
+**Real-life example — customer support bot:**
+
+A user starts a chat on your website. They ask 10 questions about their order. By question 10, every API call is sending the full transcript of all 9 previous turns plus the new one. If 1,000 customers are chatting at the same time, that is a lot of tokens — and cost — per request. This is why production apps:
+- Summarise conversation history when it gets long ("truncate and summarise")
+- Store the summary and use that instead of the raw transcript
+- Set a maximum conversation length after which a new session begins
+
+**What looks like "memory" in tools like Claude Code or ChatGPT:**
+
+Those tools inject notes, project files, and compressed summaries into the context window at the start of every call. The model still has no internal memory — it just starts each turn with more context already loaded. The "memory" is in the files and messages, not in the model itself.
 
 ---
 
@@ -158,13 +218,127 @@ The flow:
 4. Your code calls the actual function and sends the result back
 5. The model uses the result to form its final reply
 
-Real use cases:
-- Look up a user's account data
-- Check the current price of a product
-- Search a knowledge base
-- Call an external API (weather, calendar, database)
+### Real-world use cases
 
-This is how "AI agents" work — the model orchestrates multiple tool calls to complete a task.
+**1. Live data lookup**
+User asks "what's my account balance?" — model calls `get_account_balance(user_id)` which hits your database and returns the real number. Without function calling, the model would guess or refuse. With it, the answer is always accurate and live.
+
+**2. Taking actions**
+User says "book me a meeting tomorrow at 3pm" — model calls `create_calendar_event(date, time, title)` which calls the Outlook or Google Calendar API and actually creates the event. The model decided what to do; your function did the work.
+
+**3. Multi-step agent**
+User says "find all my Azure VMs not used in 30 days and tell me their cost" — model calls `list_vms()`, gets the list, then calls `get_vm_metrics(vm_id)` for each one, then `get_vm_cost(vm_id)`, then writes a summary. You didn't write any routing logic — the model decided the steps on its own.
+
+**4. Customer support bot**
+User says "my order hasn't arrived" — model calls `get_order_status(order_id)` which hits your order system, gets real tracking data, and answers with actual shipping info instead of a generic reply.
+
+**5. RAG with smart routing**
+User asks a question — model decides whether to call `search_knowledge_base(query)`, `get_live_pricing(product)`, or `escalate_to_human()` based on what the question actually needs. You don't write any `if/else` routing logic — the model routes itself.
+
+**The key value:** without function calling you would have to write `if "balance" in question: ... elif "book meeting" in question: ...` for every possible intent. Function calling replaces all of that — the model reads the question and picks the right function itself.
+
+### How to think about function calling — the manager analogy
+
+Imagine you are a manager. You have an assistant (the model) and an employee (your Python function). The assistant cannot talk to the employee directly — only you can.
+
+1. A customer asks: *"How many resources are in rg-production?"*
+2. You pass the question to the assistant
+3. The assistant says: *"I don't know — but you told me there's an employee called `get_resource_group_info`. Ask them and tell me what they say."*
+4. YOU call the employee: `get_resource_group_info("rg-production")`
+5. The employee answers: *"12 resources"*
+6. You tell the assistant what the employee said
+7. The assistant writes the final answer to the customer
+
+The model never touches your function. It tells you which function to call and with what arguments. You call it and report back. The `tools` list is you telling the assistant what employees exist and what they know. Without it, the assistant doesn't know the function exists.
+
+### The two parts of function calling
+
+**1. Your Python function** — a normal function that does something real. In production this calls a database, an API, or the Azure SDK. You write it like any other function.
+
+**2. The tool description** — a JSON object that tells the model the function exists, what it does in plain English, and what arguments it takes. The model reads this and decides on its own whether to call it.
+
+**The model never calls your function directly.** The flow is:
+
+```
+User asks a question
+    ↓
+Model reads the tools list and decides: "I need to call a tool"
+    ↓
+Model returns finish_reason = "tool_calls" with the function name and arguments it wants
+    ↓
+Your code calls the actual Python function with those arguments
+    ↓
+Your code sends the result back with role = "tool"
+    ↓
+Model reads the result and writes the final reply
+```
+
+`finish_reason == "tool_calls"` means the model stopped mid-conversation to request a function — it has not written a final reply yet. You run the function, return the result, and call the API again for the final answer.
+
+---
+
+## Agents
+
+### Function calling is NOT an agent
+
+Function calling is a single capability — the model decides a tool is needed, returns a structured request, your code runs the function, your code sends the result back. That is one turn. It stops there.
+
+An **agent** is a loop built around that capability. It keeps calling the model, running tools, and feeding results back — repeating until the model decides it has a final answer.
+
+```
+Function calling:
+  User asks → model requests a tool → you run it → you send result → model replies → DONE
+
+Agent:
+  User asks → model requests tool A → run it → model requests tool B → run it
+            → model requests tool C → run it → model writes final answer → DONE
+```
+
+The key difference: **the agent decides how many steps to take.** You didn't write `if/elif/else` logic to pick the next step — the model reads each tool result and figures out what to do next on its own.
+
+### What an agent uses
+
+An agent is not just tools. A real agent combines several things:
+
+| Component | What it is | Real example |
+|---|---|---|
+| **Tools / functions** | Python functions the model can call | `search_database()`, `send_email()`, `get_weather()` |
+| **Short-term memory** | The conversation history (context window) | All the messages so far in this session |
+| **Long-term memory** | External storage the agent reads and writes | A vector database, files, a database table |
+| **Other models** | Calling a specialist model for a subtask | A vision model to read an image, then pass the text to GPT-4o |
+| **Other agents** | Sub-agents the main agent delegates to | A "research agent" that searches the web, a "writer agent" that drafts the report |
+| **Planning** | An explicit reasoning step before acting | "Break this goal into subtasks, then execute each one" |
+
+The simplest possible agent uses only tools in a loop. That is what most tutorials show and what this stage covers.
+
+### Real-life examples of agents
+
+**1. HR onboarding agent**
+An employee joins. The agent:
+- Calls `create_ad_account(name, department)` → creates their Active Directory account
+- Calls `assign_licenses(user_id, ["M365", "Azure"])` → assigns software licences
+- Calls `add_to_groups(user_id, department)` → adds them to the right Teams channels
+- Calls `send_welcome_email(user_id)` → sends the welcome email
+- Writes a summary back: "Onboarding complete. 4 steps completed."
+
+A human used to do all of these steps manually across 4 different systems. The agent does them in sequence with no routing logic written by you.
+
+**2. Azure cost review agent**
+You ask: "Find all my VMs that haven't been used in 30 days and show me their monthly cost."
+- Agent calls `list_all_vms()` → gets a list of 40 VMs
+- For each VM, calls `get_vm_metrics(vm_id, days=30)` → checks CPU usage
+- For idle VMs, calls `get_vm_cost(vm_id)` → gets the monthly cost
+- Writes a final table with the results
+
+You didn't write any loop or branching logic — the model decided to iterate over each VM on its own.
+
+**3. Research and write agent (multi-agent)**
+You ask: "Write me a summary of GPT-4o vs Gemini 1.5 Pro."
+- Main agent delegates to a "research sub-agent" that searches the web and returns structured notes
+- Main agent delegates to a "writing sub-agent" that drafts the summary from the notes
+- Main agent reviews the draft and returns the final answer
+
+Each sub-agent is itself a model in a loop. The main agent coordinates them without knowing the internal steps each one took.
 
 ---
 
@@ -202,15 +376,81 @@ This is the link between Stage 06 (Azure AI Search) and Stage 07 (Azure OpenAI).
 
 ## Structured Outputs
 
-By default, the model returns free-form text. For real applications you want structured data you can parse and use in code. Two options:
+### Structured vs unstructured information
 
-### JSON mode
+**Unstructured information** is text a human wrote with no predictable shape. Your code cannot reliably read it.
 
-Add `response_format={"type": "json_object"}` to force the model to return valid JSON. You still need to tell it in the system message what fields to include.
+> "The order arrived late and the box was damaged. I'm pretty unhappy about it."
 
-### Structured Outputs with pydantic
+You understand this. Code does not — there is no consistent field to read.
 
-The stricter option. You define a Python class with typed fields using `pydantic`. The model is forced to return an object that matches your class exactly — no missing fields, no wrong types. You get back a typed Python object, not raw JSON.
+**Structured information** has a known, consistent shape. Every record has the same fields and types.
+
+```json
+{
+  "sentiment": "negative",
+  "issues": ["late delivery", "damaged packaging"],
+  "rating_predicted": 2
+}
+```
+
+Now code can sort by sentiment, count how many orders had damage, trigger a refund workflow, or store this in a database.
+
+**More real-life examples:**
+
+| Unstructured | Structured equivalent |
+|---|---|
+| A CV as a Word document | `{"name": "Reza", "skills": ["Python", "Azure"], "years_exp": 3}` |
+| A doctor's handwritten notes | `{"diagnosis": "hypertension", "medication": "X", "dosage": "10mg"}` |
+| An invoice PDF | `{"vendor": "Acme", "total": 450.00, "due_date": "2026-12-01"}` |
+| A customer complaint email | `{"category": "shipping", "urgency": "high", "sentiment": "negative"}` |
+| A property listing description | `{"bedrooms": 3, "bathrooms": 2, "price": 450000, "parking": true}` |
+
+The world produces enormous amounts of unstructured information — emails, documents, notes, reviews. Before LLMs the only way to extract structure was to pay people to read and label them, or write fragile regex rules. Now you prompt a model, ask for JSON back, and it does the extraction.
+
+### Why you need JSON mode or Pydantic — the problem with plain text
+
+If you ask the model "what is the sentiment of this review?" it might reply:
+
+- `"Positive"`
+- `"The sentiment is positive."`
+- `"I'd say it's mostly positive, though with some neutral undertones."`
+
+All three are correct answers. None of them are easy to use in code. You'd have to write string-parsing logic and handle every variation — fragile and error-prone.
+
+**JSON mode** solves this. Add `response_format={"type": "json_object"}` and you get:
+
+```json
+{"sentiment": "positive", "confidence": 0.92}
+```
+
+Your code reads `response["sentiment"]` reliably every time. You still need to tell the model in the system message what fields to include — JSON mode only guarantees valid JSON, not what's inside it.
+
+**Pydantic** goes one step further. You define a Python class describing exactly what shape the data must have. The SDK validates the model's output against it before your code ever touches it. If the model returns the wrong type or a missing field, Pydantic catches it immediately — not somewhere deep in your code later.
+
+```python
+# You define the shape you want:
+class SentimentResult(BaseModel):
+    sentiment: str        # must be a string
+    confidence: float     # must be a number
+    issues: list[str]     # must be a list of strings
+
+# You get back a typed Python object — not raw text, not raw JSON
+result = client.beta.chat.completions.parse(...)
+print(result.sentiment)    # "negative"
+print(result.confidence)   # 0.87
+```
+
+### When to use each
+
+| Situation | Use |
+|---|---|
+| Simple extraction, one or two fields | JSON mode |
+| Complex extraction, nested fields, strict types | Pydantic |
+| Output will be stored in a database | Pydantic — catch bad data before it gets in |
+| Output will be passed to another service or agent step | JSON mode or Pydantic |
+| Classification from a fixed list of categories | Pydantic with `Literal["a", "b", "c"]` type |
+| A human will read the answer (chat, Q&A) | Neither — plain text is fine |
 
 **When to use structured outputs:**
 - Extracting data from documents (invoices, forms, support tickets)
@@ -258,10 +498,10 @@ Two options:
 
 | Method | When to use |
 |---|---|
-| **API key** | Local development — simple, fast to set up |
-| **Managed Identity** | Production — no credentials in code or `.env`, RBAC-controlled |
+| **API key** | Quick throwaway scripts — simple but less secure |
+| **DefaultAzureCredential** | Local dev (`az login`) and production (Managed Identity) — same code, no keys anywhere |
 
-For local development we use API key. For the final project deployed to Azure, everything switches to Managed Identity — same pattern as every other service in this repo.
+The recommended approach is `DefaultAzureCredential` for everything. Locally it picks up your `az login` session. On Azure it picks up the Managed Identity automatically. No keys in `.env`, no risk of leaking credentials. The only requirement is running `az login` once before your first local run.
 
 ---
 

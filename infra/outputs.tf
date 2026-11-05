@@ -94,3 +94,11 @@ output "storage_account_name" {
   value = module.storage.account_name
 }
 
+output "openai_endpoint" {
+  value = module.openai.endpoint
+}
+
+output "openai_key" {
+  value = module.openai.key
+  sensitive = true
+}
